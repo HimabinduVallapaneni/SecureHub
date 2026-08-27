@@ -1,48 +1,59 @@
-import { Search, Bell } from "lucide-react";
-
 function Header() {
   return (
     <header
       style={{
-        height: "70px",
-        background: "white",
+        height: "64px",
+        background: "#ffffff",
         borderBottom: "1px solid #e5e7eb",
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
-        padding: "0 24px",
+        padding: "0 30px",
       }}
     >
+      <div>
+        <strong
+          style={{
+            fontSize: "16px",
+            color: "#101828",
+          }}
+        >
+          SecureHub
+        </strong>
+      </div>
+
       <div
         style={{
           display: "flex",
           alignItems: "center",
-          gap: "8px",
-          background: "#f3f4f6",
-          padding: "10px 14px",
-          borderRadius: "8px",
-          width: "320px",
+          gap: "12px",
         }}
       >
-        <Search size={18} />
-
-        <input
-          placeholder="Search findings..."
+        <div
           style={{
-            border: "none",
-            outline: "none",
-            background: "transparent",
-            width: "100%",
+            width: "36px",
+            height: "36px",
+            borderRadius: "50%",
+            background: "#eef2ff",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontWeight: "600",
+            color: "#4f46e5",
           }}
-        />
-      </div>
-
-      <div style={{ display: "flex", alignItems: "center", gap: "18px" }}>
-        <Bell size={20} />
+        >
+          U
+        </div>
 
         <div>
-          <strong>User name</USER></strong>
-          <div style={{ fontSize: "12px", color: "#667085" }}>
+          <strong>User</strong>
+
+          <div
+            style={{
+              fontSize: "12px",
+              color: "#667085",
+            }}
+          >
             Security Engineer
           </div>
         </div>
