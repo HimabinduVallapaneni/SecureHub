@@ -232,9 +232,9 @@ jobs:
           framework: terraform
           soft_fail: false
           output_format: cli
-          download_external_modules: true
           quiet: true
           compact: true
+          download_external_modules: false
           skip_check: CKV_TF_1
 
 
