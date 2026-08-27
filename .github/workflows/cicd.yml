@@ -583,27 +583,16 @@ jobs:
       - name: Update Kubernetes image tags
         shell: bash
         run: |
-
           BACKEND_IMAGE="${{ env.REGISTRY }}/${{ steps.registry.outputs.owner }}/securehub-backend:${{ github.sha }}"
-
           FRONTEND_IMAGE="${{ env.REGISTRY }}/${{ steps.registry.outputs.owner }}/securehub-frontend:${{ github.sha }}"
 
 
-          # ----------------------------------------------------
-          # Backend
-          # ----------------------------------------------------
-
-          sed -i -E \
-            "s|image: (SECUREHUB_BACKEND_IMAGE|ghcr.io/.*/securehub-backend:[^[:space:]]+)|image: ${BACKEND_IMAGE}|g" \
+          sed -i \
+            "/securehub-backend/ s|image: .*|image: ${BACKEND_IMAGE}|" \
             kubernetes/securehub.yml
 
-
-          # ----------------------------------------------------
-          # Frontend
-          # ----------------------------------------------------
-
-          sed -i -E \
-            "s|image: (SECUREHUB_FRONTEND_IMAGE|ghcr.io/.*/securehub-frontend:[^[:space:]]+)|image: ${FRONTEND_IMAGE}|g" \
+          sed -i \
+            "/securehub-frontend/ s|image: .*|image: ${FRONTEND_IMAGE}|" \
             kubernetes/securehub.yml
 
 
