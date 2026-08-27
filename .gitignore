@@ -50,6 +50,9 @@ htmlcov/
 # -------------------------
 # Terraform
 # -------------------------
-.terraform/
+# Terraform local/generated files
+**/.terraform/*
 *.tfstate
 *.tfstate.*
+*.tfvars
+crash.log
