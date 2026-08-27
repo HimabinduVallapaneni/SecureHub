@@ -1,0 +1,436 @@
+# ==============================================================
+# SecureHub - DevSecOps CI/CD Pipeline
+# ==============================================================
+# Flow:
+# Validate → SAST → SCA → IaC Scan → Docker Lint
+# → Build Images → Trivy Scan → Push GHCR
+# → Update Kubernetes Manifest
+# ==============================================================
+
+name: SecureHub DevSecOps Pipeline
+
+on:
+  push:
+    branches:
+      - devops
+
+  pull_request:
+    branches:
+      - devops
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+
+
+jobs:
+
+  # ============================================================
+  # STAGE 1: Application Validation
+  # ============================================================
+
+  validate:
+    name: Validate Application
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      # Backend
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        working-directory: BackEnd
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Validate backend Python
+        working-directory: BackEnd
+        run: |
+          python -m compileall .
+
+      # Frontend
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: FrontEnd/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: FrontEnd
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: FrontEnd
+        run: npm run build
+
+
+  # ============================================================
+  # STAGE 2: SAST - Semgrep
+  # ============================================================
+
+  sast:
+    name: Semgrep SAST
+    runs-on: ubuntu-latest
+
+    needs: validate
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Semgrep
+        run: |
+          python -m pip install --upgrade pip
+          pip install semgrep
+
+      - name: Run Semgrep
+        run: |
+          semgrep scan \
+            --config=auto \
+            --error \
+            BackEnd FrontEnd/src
+
+
+  # ============================================================
+  # STAGE 3: SCA - Dependency Security
+  # ============================================================
+
+  sca:
+    name: Dependency Security
+    runs-on: ubuntu-latest
+
+    needs: validate
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      # Backend SCA
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Scan Python dependencies
+        run: |
+          pip-audit -r BackEnd/requirements.txt
+
+      # Frontend SCA
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: FrontEnd/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: FrontEnd
+        run: npm ci
+
+      - name: Scan frontend dependencies
+        working-directory: FrontEnd
+        run: npm audit --audit-level=high
+
+
+  # ============================================================
+  # STAGE 4: IaC Security - Checkov
+  # ============================================================
+
+  iac-scan:
+    name: Checkov IaC Scan
+    runs-on: ubuntu-latest
+
+    needs: validate
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Scan Terraform
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: terraform/
+          framework: terraform
+          soft_fail: false
+
+      - name: Scan Kubernetes
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          file: kubernetes/securehub.yml
+          framework: kubernetes
+          soft_fail: false
+
+
+  # ============================================================
+  # STAGE 5: Dockerfile Security/Lint
+  # ============================================================
+
+  dockerfile-lint:
+    name: Dockerfile Lint
+    runs-on: ubuntu-latest
+
+    needs: validate
+
+    strategy:
+      matrix:
+        dockerfile:
+          - BackEnd/Dockerfile
+          - FrontEnd/Dockerfile
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Run Hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: ${{ matrix.dockerfile }}
+          failure-threshold: error
+
+
+  # ============================================================
+  # STAGE 6: Build Docker Images
+  # ============================================================
+
+  build:
+    name: Build ${{ matrix.component }} Image
+    runs-on: ubuntu-latest
+
+    needs:
+      - sast
+      - sca
+      - iac-scan
+      - dockerfile-lint
+
+    strategy:
+      matrix:
+        include:
+          - component: backend
+            context: ./BackEnd
+            image_name: securehub-backend
+
+          - component: frontend
+            context: ./FrontEnd
+            image_name: securehub-frontend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Normalize registry owner
+        id: registry
+        shell: bash
+        run: |
+          OWNER="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "owner=$OWNER" >> "$GITHUB_OUTPUT"
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t ${{ env.REGISTRY }}/${{ steps.registry.outputs.owner }}/${{ matrix.image_name }}:${{ github.sha }} \
+            ${{ matrix.context }}
+
+      - name: Save Docker image
+        run: |
+          docker save \
+            ${{ env.REGISTRY }}/${{ steps.registry.outputs.owner }}/${{ matrix.image_name }}:${{ github.sha }} \
+            -o /tmp/${{ matrix.component }}.tar
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.component }}-image
+          path: /tmp/${{ matrix.component }}.tar
+          retention-days: 1
+
+
+  # ============================================================
+  # STAGE 7: Container Security - Trivy
+  # ============================================================
+
+  image-scan:
+    name: Scan ${{ matrix.component }} Image
+    runs-on: ubuntu-latest
+
+    needs: build
+
+    strategy:
+      matrix:
+        include:
+          - component: backend
+            image_name: securehub-backend
+
+          - component: frontend
+            image_name: securehub-frontend
+
+    steps:
+      - name: Download Docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.component }}-image
+          path: /tmp/image
+
+      - name: Load Docker image
+        run: |
+          docker load -i /tmp/image/${{ matrix.component }}.tar
+
+      - name: Normalize registry owner
+        id: registry
+        shell: bash
+        run: |
+          OWNER="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "owner=$OWNER" >> "$GITHUB_OUTPUT"
+
+      - name: Run Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: >-
+            ${{ env.REGISTRY }}/${{ steps.registry.outputs.owner }}/${{ matrix.image_name }}:${{ github.sha }}
+
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+
+  # ============================================================
+  # STAGE 8: Push Verified Images to GHCR
+  #
+  # Only on real push to devops.
+  # Pull Requests never publish images.
+  # ============================================================
+
+  publish:
+    name: Publish Images to GHCR
+    runs-on: ubuntu-latest
+
+    needs: image-scan
+
+    if: >
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/devops'
+
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      matrix:
+        include:
+          - component: backend
+            image_name: securehub-backend
+
+          - component: frontend
+            image_name: securehub-frontend
+
+    steps:
+      - name: Download Docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.component }}-image
+          path: /tmp/image
+
+      - name: Load Docker image
+        run: |
+          docker load -i /tmp/image/${{ matrix.component }}.tar
+
+      - name: Normalize registry owner
+        id: registry
+        shell: bash
+        run: |
+          OWNER="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "owner=$OWNER" >> "$GITHUB_OUTPUT"
+
+      - name: Login to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push image
+        run: |
+          docker push \
+            ${{ env.REGISTRY }}/${{ steps.registry.outputs.owner }}/${{ matrix.image_name }}:${{ github.sha }}
+
+
+  # ============================================================
+  # STAGE 9: Update Kubernetes Manifest
+  # ==============================================================
+
+  update-kubernetes:
+    name: Update Kubernetes Manifest
+    runs-on: ubuntu-latest
+
+    needs: publish
+
+    if: >
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/devops'
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout devops branch
+        uses: actions/checkout@v6
+        with:
+          ref: devops
+
+      - name: Normalize registry owner
+        id: registry
+        shell: bash
+        run: |
+          OWNER="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "owner=$OWNER" >> "$GITHUB_OUTPUT"
+
+      - name: Update image tags
+        shell: bash
+        run: |
+          BACKEND_IMAGE="${{ env.REGISTRY }}/${{ steps.registry.outputs.owner }}/securehub-backend:${{ github.sha }}"
+          FRONTEND_IMAGE="${{ env.REGISTRY }}/${{ steps.registry.outputs.owner }}/securehub-frontend:${{ github.sha }}"
+
+          sed -i -E \
+            "s|image: (SECUREHUB_BACKEND_IMAGE|ghcr.io/.*/securehub-backend:[^[:space:]]+)|image: ${BACKEND_IMAGE}|g" \
+            kubernetes/securehub.yml
+
+          sed -i -E \
+            "s|image: (SECUREHUB_FRONTEND_IMAGE|ghcr.io/.*/securehub-frontend:[^[:space:]]+)|image: ${FRONTEND_IMAGE}|g" \
+            kubernetes/securehub.yml
+
+          grep "image:" kubernetes/securehub.yml
+
+      - name: Commit manifest update
+        shell: bash
+        run: |
+          if git diff --quiet kubernetes/securehub.yml; then
+            echo "No Kubernetes image update required."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add kubernetes/securehub.yml
+
+          git commit \
+            -m "ci: update SecureHub images to ${GITHUB_SHA::7} [skip ci]"
+
+          git push origin HEAD:devops
