@@ -245,7 +245,7 @@ jobs:
       - name: Scan Kubernetes
         uses: bridgecrewio/checkov-action@v12
         with:
-          file: k8s/securehub.yml
+          file: K8s/securehub.yml
           framework: kubernetes
           soft_fail: false
           output_format: cli
@@ -586,14 +586,13 @@ jobs:
           BACKEND_IMAGE="${{ env.REGISTRY }}/${{ steps.registry.outputs.owner }}/securehub-backend:${{ github.sha }}"
           FRONTEND_IMAGE="${{ env.REGISTRY }}/${{ steps.registry.outputs.owner }}/securehub-frontend:${{ github.sha }}"
 
-
           sed -i \
             "/securehub-backend/ s|image: .*|image: ${BACKEND_IMAGE}|" \
-            k8s/securehub.yml
+            K8s/securehub.yml
 
           sed -i \
             "/securehub-frontend/ s|image: .*|image: ${FRONTEND_IMAGE}|" \
-            k8s/securehub.yml
+            K8s/securehub.yml
 
 
       # --------------------------------------------------------
@@ -602,7 +601,7 @@ jobs:
 
       - name: Display image references
         run: |
-          grep "image:" k8s/securehub.yml
+          grep "image:" K8s/securehub.yml
 
 
       # --------------------------------------------------------
@@ -616,7 +615,7 @@ jobs:
         shell: bash
         run: |
 
-          if git diff --quiet k8s/securehub.yml; then
+          if git diff --quiet K8s/securehub.yml; then
 
             echo "Kubernetes manifest already contains current image tags."
 
@@ -636,7 +635,7 @@ jobs:
 
 
           git add \
-            k8s/securehub.yml
+            K8s/securehub.yml
 
 
           git commit \
